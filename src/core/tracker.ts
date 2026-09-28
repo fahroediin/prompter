@@ -36,6 +36,8 @@ function pairScore(s: Token, h: Token): number {
 const GAP = -0.5;
 // Final words kept from earlier speech results as context for the next one.
 const CONTEXT_WORDS = 6;
+// Score cost per script word skipped beyond what the new speech explains.
+const JUMP_PENALTY = 0.25;
 // Script words before a manually chosen position that count as already said.
 // Two let a lone word match up to ~6 words past the new position (skipping a
 // sentence's first words) but not further.
@@ -194,11 +196,19 @@ export class Tracker {
     const lo = Math.max(0, this.pos - 5);
     const hi = Math.min(this.tokens.length, this.pos + 40);
 
+    // Moving ahead further than the newly heard words explain means script
+    // words were skipped; each costs JUMP_PENALTY. Otherwise, in text with
+    // repeated passages, a couple of common words (plus noisy context) match
+    // a later copy just as well as the nearby one and the position leaps
+    // ahead. A long, strong match can still pay for a real skip.
+    const newWords = heard.length - (firstNewCol - 1);
     let bestEnd = -1;
     let bestScore = -Infinity;
     for (let j = Math.max(1, lo); j <= hi; j++) {
-      const { score, matched } = alignEndingAt(this.tokens, j, heard, firstNewCol);
-      if (score < 3 || matched < 2) continue;
+      const aligned = alignEndingAt(this.tokens, j, heard, firstNewCol);
+      const skipped = Math.max(0, j - this.pos - newWords);
+      const score = aligned.score - JUMP_PENALTY * skipped;
+      if (score < 3 || aligned.matched < 2) continue;
       // tie-break: prefer nearest to current pos
       const better =
         score > bestScore ||

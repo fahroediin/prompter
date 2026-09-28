@@ -211,6 +211,58 @@ describe('Tracker with short speech segments', () => {
   });
 });
 
+// Scripts with a chorus repeated back to back and many short common words:
+// a couple of matching words must not pull the position into a later copy.
+describe('Tracker with repeated passages', () => {
+  // Synthetic song-like text (verse, then chorus + bridge three times, then
+  // the last line twice more): short common words and back-to-back repeats.
+  const VERSE = 'Pagi ini ku berjalan sendiri\nTak ramai seperti dulu\nKamu kok begitu melupakan aku\nBegitu jauh dari hatiku\n';
+  const CHORUS = 'Biar ku tinggalkan saja\nKu tak mau hatiku terluka\nLebih baik ku lepaskan saja\nKu tak mau batinku tersiksa\n';
+  const BRIDGE = 'Jangan kau selalu merasa\nDunia bukan milikmu saja\nLebih baik ku tinggalkan saja\nCari teman lagi\n';
+  const S = VERSE + CHORUS + BRIDGE + CHORUS + BRIDGE + CHORUS + BRIDGE + 'Cari teman lagi\nCari teman lagi';
+  // Feed sequences below were captured from a simulation of noisy speech
+  // (misheard words, fillers, random segment sizes) that made the old
+  // tracker jump 19-39 words ahead.
+
+  it('noise plus "ku tak" does not jump into the chorus', () => {
+    const t = new Tracker(S);
+    t.feed('eh tersiksa ku', true); // filler + misheard words, reader at word 4
+    t.feed('ku tak', false); // reader at "tak" (word 5)
+    expect(t.position).toBeLessThanOrEqual(8);
+  });
+
+  it('a lone word after a noisy segment does not jump to a later chorus', () => {
+    const t = new Tracker(S);
+    t.setPosition(15);
+    for (const [text, fin] of [
+      ['ku', false], ['ku tinggalkan', false], ['ku tinggalkan', true], ['saja', false],
+      ['saja tersiksa oke mau', false], ['saja tersiksa oke mau merasa biar', true],
+    ] as const) t.feed(text, fin);
+    const before = t.position; // reader is at word 27
+    t.feed('lebih', false);
+    expect(t.position - before).toBeLessThanOrEqual(8);
+  });
+
+  it('a misheard repeat of the last line does not skip to the final copy', () => {
+    const t = new Tracker(S);
+    t.setPosition(81);
+    for (const [text, fin] of [
+      ['lebih mau', true], ['ku', false], ['ku tinggalkan', false],
+      ['ku tinggalkan saja', false], ['ku tinggalkan saja', true], ['cari', false],
+    ] as const) t.feed(text, fin);
+    t.feed('cari lagi lagi', false); // reader at word 87
+    expect(t.position).toBeLessThanOrEqual(92);
+  });
+
+  it('a long exact phrase can still move the position far ahead', () => {
+    const t = new Tracker(S);
+    t.setPosition(5);
+    // the second chorus line, 17 words ahead, read in full with its neighbours
+    t.feed('biar ku tinggalkan saja ku tak mau hatiku terluka', true);
+    expect(t.tokens[t.position - 1].norm).toBe('terluka');
+  });
+});
+
 // The speaker clicks a word (or uses the slider / prev / next) to skip ahead
 // and starts reading there. The words before the new position count as said.
 describe('Tracker after a manual move', () => {
