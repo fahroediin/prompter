@@ -1,5 +1,125 @@
 <!doctype html>
 <html lang="id">
-  <head><meta charset="utf-8" /><title>Prompter Listener</title></head>
-  <body><p>Listener placeholder</p></body>
+  <head>
+    <meta charset="utf-8" />
+    <title>Prompter Listener</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 24px; background: #111; color: #eee; }
+      #state { font-size: 18px; margin-bottom: 12px; }
+      #last { opacity: 0.7; }
+      .err { color: #f66; }
+      .ok { color: #6f6; }
+    </style>
+  </head>
+  <body>
+    <div id="state">Menghubungkan…</div>
+    <div id="last"></div>
+    <p>Biarkan tab ini terbuka selama sesi. Izinkan akses mikrofon saat diminta.</p>
+    <script>
+      const stateEl = document.getElementById('state');
+      const lastEl = document.getElementById('last');
+      const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+
+      // Desired state, set by the last start/stop command (or socket close) received
+      // from the app. The recognizer must never run while this is false (AC-05.03).
+      let wantRunning = false;
+      // True from the moment recognition.start() is called until onend fires for
+      // that session. Used to avoid calling start() while a session (or its
+      // still-in-flight stop) is active, which throws InvalidStateError.
+      let recogActive = false;
+      let recog;
+      let ws;
+
+      function setState(text, cls) { stateEl.textContent = text; stateEl.className = cls || ''; }
+
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { setState('Browser tidak mendukung Web Speech. Pakai Chrome/Edge.', 'err'); }
+
+      function makeRecog() {
+        const r = new SR();
+        r.lang = 'id-ID';
+        r.continuous = true;
+        r.interimResults = true;
+        r.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const res = e.results[i];
+            const text = res[0].transcript;
+            send({ type: 'transcript', text, isFinal: res.isFinal });
+            if (res.isFinal) lastEl.textContent = text;
+          }
+        };
+        r.onerror = (e) => {
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            setState('Mikrofon ditolak. Izinkan akses mikrofon.', 'err');
+            send({ type: 'listener-error', code: 'mic-denied' });
+          } else if (e.error === 'network') {
+            setState('Jaringan error.', 'err');
+            send({ type: 'listener-error', code: 'network' });
+          }
+          // 'no-speech' and other transient errors are not reported; onend
+          // follows and handles the restart-or-stay-stopped decision.
+        };
+        r.onend = () => {
+          recogActive = false;
+          // Only auto-restart if the app still wants us running (case 1, 3: a
+          // stop or socket close must not cause a restart here). Case 4:
+          // no-speech / a normal end while still wanted restarts.
+          if (wantRunning) {
+            attemptStart();
+          } else {
+            setState('Dijeda.', '');
+          }
+        };
+        return r;
+      }
+
+      function attemptStart() {
+        if (!SR || !wantRunning || recogActive) return; // case 2: never start over an active session
+        if (!recog) recog = makeRecog();
+        recogActive = true;
+        try {
+          recog.start();
+          setState('Mendengarkan…', 'ok');
+        } catch (err) {
+          // InvalidStateError etc: recognition was already starting/running
+          // under the hood. Treat as still active; onend (when it eventually
+          // fires) will re-evaluate wantRunning and restart if still needed.
+          recogActive = true;
+        }
+      }
+
+      function startRecog() {
+        wantRunning = true;
+        attemptStart();
+      }
+
+      function stopRecog() {
+        wantRunning = false;
+        if (recog && recogActive) {
+          try { recog.stop(); } catch {}
+        } else {
+          setState('Dijeda.', '');
+        }
+      }
+
+      function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+
+      function connect() {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => setState('Tersambung. Menunggu perintah…', 'ok');
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'start') startRecog();
+          else if (msg.type === 'stop') stopRecog();
+        };
+        ws.onclose = () => {
+          stopRecog();
+          setState('Terputus. Menyambung ulang…', 'err');
+          setTimeout(connect, 1500);
+        };
+        ws.onerror = () => {};
+      }
+      connect();
+    </script>
+  </body>
 </html>
