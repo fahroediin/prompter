@@ -151,19 +151,21 @@ export class Tracker {
     const heard = heardTokens(text, isFinal);
     if (heard.length === 0) return this.pos;
 
-    // Search window for candidate ends `j`. The lower bound is intentionally
-    // wider than the "final may retreat <=5 tokens" rule below: if the search
-    // floor were exactly pos-5, the retreat clamp could never trigger (the
-    // window itself would never offer a bestEnd more than ~4 tokens behind
-    // pos), making that rule dead code. Widening the floor lets the search
-    // find a legitimately-far match, so the retreat clamp can actually reject
-    // it when it exceeds the allowed 5-token retreat.
-    const lo = Math.max(0, this.pos - 15);
+    // Search window for candidate ends `j`, per spec §4 step 2: pos-5..pos+40.
+    // The loop includes `lo` itself (via Math.max(1, lo), since j=0 would be
+    // an empty match) so that a retreat of exactly 5 tokens is reachable —
+    // starting at `lo + 1` would silently exclude the pos-5 candidate and cap
+    // the achievable retreat at 4. The final-retreat clamp below is a
+    // defensive guard: because the window's own floor already excludes any
+    // candidate more than 5 tokens behind pos, `bestEnd < this.pos - 5` should
+    // never actually trigger in practice, but the code keeps it in case the
+    // window bounds ever change.
+    const lo = Math.max(0, this.pos - 5);
     const hi = Math.min(this.tokens.length, this.pos + 40);
 
     let bestEnd = -1;
     let bestScore = -Infinity;
-    for (let j = lo + 1; j <= hi; j++) {
+    for (let j = Math.max(1, lo); j <= hi; j++) {
       const { score, matched } = alignEndingAt(this.tokens, j, heard);
       if (score < 3 || matched < 2) continue;
       // tie-break: prefer nearest to current pos

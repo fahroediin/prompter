@@ -61,11 +61,26 @@ describe('Tracker basic follow', () => {
     const t = new Tracker(SCRIPT);
     // Place position far past the phrase we're about to repeat: "selamat
     // pagi semua" truly ends at token index 3, so retreating there from 15
-    // would be a 12-token retreat -- well beyond the allowed 5, so it must
-    // be refused and position must stay put.
+    // would be a 12-token retreat -- well beyond the allowed 5. Per spec §4
+    // step 2, the candidate window floor is pos-5, so a match at token 3 is
+    // outside the window entirely (never considered) -- position must stay
+    // put exactly, not merely "not jump to token 3".
     t.setPosition(15);
     const p = t.feed('selamat pagi semua', true);
     expect(p).toBe(15);
+  });
+
+  it('AC-04.05c: a final retreat of exactly 5 tokens is accepted', () => {
+    const t = new Tracker(SCRIPT);
+    // "hari ini kita membahas produk baru" truly ends at token index 9.
+    // From pos=14 that is a retreat of exactly 5 tokens -- the boundary case
+    // the pos-5 window floor must still include. The candidate loop must
+    // start at `lo` itself (Math.max(1, lo)), not `lo + 1`: manually verified
+    // that starting at `lo + 1` makes this test fail (position lands on 10
+    // instead of 9, i.e. the pos-5 candidate is silently skipped).
+    t.setPosition(14);
+    const p = t.feed('hari ini kita membahas produk baru', true);
+    expect(p).toBe(9);
   });
 
   it('AC-04.06: duplicate phrase does not jump to a far occurrence', () => {
