@@ -159,3 +159,54 @@ describe('Tracker manual + pause + status', () => {
     expect(t.status).toBe('lost');
   });
 });
+
+// Chrome's continuous recognition splits speech into separate results after
+// short pauses, and each result is fed on its own — often a single word.
+describe('Tracker with short speech segments', () => {
+  const SHORT = 'Selamat pagi semuanya. Saat ini kami sedang mengembangkan fitur baru.';
+
+  function atSaatIniKami(clock?: () => number) {
+    const t = new Tracker(SHORT, clock);
+    t.feed('selamat pagi semuanya', true);
+    t.feed('saat ini kami', true);
+    expect(t.position).toBe(6);
+    return t;
+  }
+
+  it('a one-word final segment advances using the previous words as context', () => {
+    const t = atSaatIniKami();
+    t.feed('sedang', true);
+    expect(t.position).toBe(7);
+    t.feed('mengembangkan', true);
+    expect(t.position).toBe(8);
+  });
+
+  it('a one-word interim segment advances too', () => {
+    const t = atSaatIniKami();
+    t.feed('sedang', false);
+    expect(t.position).toBe(7);
+  });
+
+  it('context alone is not a match: off-script words still go lost', () => {
+    let clock = 1000;
+    const t = atSaatIniKami(() => clock);
+    clock += 11000;
+    t.feed('halo', true);
+    expect(t.position).toBe(6);
+    expect(t.status).toBe('lost');
+  });
+
+  it('a manual move drops the old context', () => {
+    const t = atSaatIniKami();
+    t.setPosition(0);
+    t.feed('sedang', true); // alone, without "saat ini kami" before it
+    expect(t.position).toBe(0);
+  });
+
+  it('setPosition to the same place (continue after pause) keeps the context', () => {
+    const t = atSaatIniKami();
+    t.setPosition(6);
+    t.feed('sedang', true);
+    expect(t.position).toBe(7);
+  });
+});

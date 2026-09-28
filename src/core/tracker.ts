@@ -34,17 +34,22 @@ function pairScore(s: Token, h: Token): number {
 }
 
 const GAP = -0.5;
+// Final words kept from earlier speech results as context for the next one.
+const CONTEXT_WORDS = 6;
 
 // Local alignment (Smith-Waterman-like) of heard tokens against a script slice
 // that ENDS at scriptEnd (exclusive). The alignment must end at the LAST row
 // (i.e. at script token scriptEnd-1) — otherwise "ending at j" is meaningless
 // and callers can't apply position rules (interim-advance-only, final-retreat
-// clamp) relative to j. Returns {score, matched} for the best alignment that
-// ends at the last script row, across all possible heard-column endpoints.
+// clamp) relative to j. Returns {score, matched} for the best alignment whose
+// last step MATCHES script token scriptEnd-1 with a heard word at column >=
+// firstNewCol: "position j" means the speaker just said word j-1. Ending on a
+// gap instead would let words carried over as context match on their own.
 function alignEndingAt(
   script: Token[],
   scriptEnd: number,
-  heard: Token[]
+  heard: Token[],
+  firstNewCol = 1
 ): { score: number; matched: number } {
   const start = Math.max(0, scriptEnd - (heard.length + 6));
   const s = script.slice(start, scriptEnd);
@@ -73,14 +78,17 @@ function alignEndingAt(
       }
     }
   }
-  // Anchor at the last script row (i = m): the alignment must end at
-  // scriptEnd-1. Take the best score across all heard-column endpoints.
+  // Anchor at the last script row (i = m) through a diagonal match with a
+  // newly heard word. Take the best score across those endpoints.
   let best = 0;
   let bestMatched = 0;
-  for (let j = 1; j <= n; j++) {
-    if (dp[m][j] > best) {
-      best = dp[m][j];
-      bestMatched = mt[m][j];
+  for (let j = Math.max(1, firstNewCol); j <= n; j++) {
+    const ps = pairScore(s[m - 1], heard[j - 1]);
+    if (ps < 1) continue;
+    const score = dp[m - 1][j - 1] + ps;
+    if (score > best) {
+      best = score;
+      bestMatched = mt[m - 1][j - 1] + 1;
     }
   }
   return { score: best, matched: bestMatched };
@@ -96,6 +104,7 @@ export class Tracker {
   readonly tokens: Token[];
   readonly sentenceStarts: number[];
   private pos = 0;
+  private context: Token[] = [];
   private lastMatchAt: number;
   private now: () => number;
 
@@ -143,13 +152,26 @@ export class Tracker {
   }
 
   setPosition(pos: number): void {
-    this.pos = Math.max(0, Math.min(pos, this.tokens.length));
+    const next = Math.max(0, Math.min(pos, this.tokens.length));
+    // The context described where the speaker was; a manual move invalidates it.
+    if (next !== this.pos) this.context = [];
+    this.pos = next;
     this.lastMatchAt = this.now();
   }
 
+  // Chrome splits continuous speech into separate results after short pauses,
+  // often a single word, and each result arrives here on its own. A lone word
+  // can never reach the 2-matched-words threshold, so the last few final words
+  // are prepended as context. Matches must still end on a new word.
   feed(text: string, isFinal: boolean): number {
-    const heard = heardTokens(text, isFinal);
-    if (heard.length === 0) return this.pos;
+    const segment = heardTokens(text, isFinal);
+    if (segment.length === 0) return this.pos;
+    const pos = this.align([...this.context, ...segment], this.context.length + 1, isFinal);
+    if (isFinal) this.context = [...this.context, ...segment].slice(-CONTEXT_WORDS);
+    return pos;
+  }
+
+  private align(heard: Token[], firstNewCol: number, isFinal: boolean): number {
 
     // Search window for candidate ends `j`, per spec §4 step 2: pos-5..pos+40.
     // The loop includes `lo` itself (via Math.max(1, lo), since j=0 would be
@@ -166,7 +188,7 @@ export class Tracker {
     let bestEnd = -1;
     let bestScore = -Infinity;
     for (let j = Math.max(1, lo); j <= hi; j++) {
-      const { score, matched } = alignEndingAt(this.tokens, j, heard);
+      const { score, matched } = alignEndingAt(this.tokens, j, heard, firstNewCol);
       if (score < 3 || matched < 2) continue;
       // tie-break: prefer nearest to current pos
       const better =
