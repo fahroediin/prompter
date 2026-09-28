@@ -15,7 +15,8 @@ function fakeRaf() {
     cbs.clear();
     current.forEach(([, cb]) => cb(t));
   };
-  return { raf, cancel, tick };
+  const pending = () => cbs.size;
+  return { raf, cancel, tick, pending };
 }
 
 describe('AutoScroller', () => {
@@ -44,11 +45,13 @@ describe('AutoScroller', () => {
 
   it('start() while already running does not double the scroll rate', () => {
     const el = { scrollTop: 0 };
-    const { raf, cancel, tick } = fakeRaf();
+    const { raf, cancel, tick, pending } = fakeRaf();
     const s = new AutoScroller(el, { raf, cancel });
     s.start(100); // 100 px/sec
     tick(1000); // first frame sets baseline
     s.start(100); // start again while running (cancels pending frame, resets last=-1)
+    // Guard must have cancelled the old frame; exactly 1 pending callback
+    expect(pending()).toBe(1);
     tick(2000); // new baseline from t=2000
     tick(3000); // +1s from baseline -> +100px
     expect(el.scrollTop).toBeCloseTo(100, 0);
