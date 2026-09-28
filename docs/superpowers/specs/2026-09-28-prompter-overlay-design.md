@@ -19,7 +19,8 @@ Non-tujuan (v1): sinkron multi-device, editor naskah kaya format, pengenalan sua
 
 **US-01 Overlay tidak terlihat saat screen share**
 Sebagai presenter, saya ingin prompter tampil di atas semua jendela tetapi tidak tertangkap screen share, agar peserta tidak melihat naskah saya.
-- AC-01.01 Overlay selalu di atas jendela lain (always-on-top), termasuk di atas Zoom/Meet/Teams.
+- AC-01.01 Mode *selalu di atas* (always-on-top, termasuk di atas Zoom/Meet/Teams) dapat dinyalakan/dimatikan dari control window dan shortcut global Ctrl+Shift+T; pilihan tersimpan. Default: nyala.
+- AC-01.05 Saat mode selalu di atas mati, prompter berperilaku sebagai jendela biasa: muncul di taskbar, bisa di-minimize dan dipilih lewat Alt+Tab. Perlindungan dari screen share (AC-01.02) tetap berlaku.
 - AC-01.02 Saat berbagi layar penuh di Zoom/Meet/Teams, overlay tidak terlihat oleh peserta.
 - AC-01.03 Overlay dapat dipindah dan diubah ukurannya.
 - AC-01.04 Mode click-through dapat dinyalakan: klik menembus ke aplikasi di belakang, kecuali tombol kontrol overlay.
@@ -67,8 +68,9 @@ Stack: Electron + TypeScript, Vitest untuk unit test. Lokasi: `Github_Fahrudin/p
 
 ```
 Electron main process
-  - overlay window: frameless, transparent, alwaysOnTop('screen-saver'),
-    setContentProtection(true), setIgnoreMouseEvents(true, {forward:true}) saat click-through
+  - overlay window: frameless, transparent, setContentProtection(true),
+    setAlwaysOnTop(true,'screen-saver') / setAlwaysOnTop(false) + setSkipTaskbar sesuai setting,
+    setIgnoreMouseEvents(true, {forward:true}) saat click-through
   - control window: editor naskah, pengaturan, tombol buka listener
   - HTTP + WebSocket server lokal di 127.0.0.1:47821 (menyajikan listener.html)
   - globalShortcut, penyimpanan settings/naskah (JSON di userData)
@@ -135,4 +137,5 @@ Alasan Web Speech via browser eksternal: Chromium di Electron tidak menyertakan 
 - `setContentProtection` hanya efektif di Windows 10 2004+; versi lama menampilkan kotak hitam. Mesin pengguna Windows 11, aman.
 - Beberapa aplikasi rekam memakai metode capture yang berbeda; diverifikasi manual.
 - Kualitas id-ID untuk kata Inggris bervariasi; ditangani oleh pencocokan fonetik dan jarak edit.
+- Mode jendela biasa: prompter bisa tertutup jendela rapat; paling nyaman dengan monitor kedua atau susunan berdampingan. Latar transparan akan memperlihatkan jendela di belakangnya, jadi disarankan transparansi rendah.
 - Tab listener harus tetap terbuka; ditutup = mode suara berhenti (terdeteksi sebagai offline).
