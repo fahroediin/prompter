@@ -2,6 +2,7 @@ import { Tracker } from '../../core/tracker';
 import { ScriptView } from './script-view';
 import { AutoScroller } from './auto-scroller';
 import { lastSentenceRange } from './sentence-range';
+import { carryPosition } from './carry-position';
 import type { TranscriptMsg, StatusMsg } from '../../shared/messages';
 import type { PromptSettings } from '../../main/settings';
 
@@ -29,6 +30,8 @@ const scroller = new AutoScroller(viewEl);
 const pauseBtn = document.getElementById('pauseBtn') as HTMLButtonElement | null;
 const controlsEl = document.querySelector('.controls') as HTMLElement | null;
 
+const LOST_STATUS = 'Posisi tidak ditemukan';
+
 let tracker = new Tracker('');
 let paused = false;
 let autoSpeed = 40;
@@ -36,21 +39,45 @@ let autoSpeed = 40;
 // or network error) so continue only restarts it if it was running before
 // the pause, rather than always restarting.
 let fallbackActive = false;
+// The status text currently shown, so onPaused(true) can clear it only when
+// it's the "lost" status (R14 fix) without touching offline/network/mic text.
+let currentStatus = '';
+
+function setStatus(text: string) {
+  currentStatus = text;
+  view.setStatus(text);
+}
 
 function refresh() {
   view.setPosition(tracker.position);
   window.prompter.sendPosition(tracker.position);
 }
 
+function applyPauseHighlight() {
+  // R6 (AC-05.04): highlight the last sentence (containing position - 1).
+  const range = lastSentenceRange(tracker.sentenceStarts, tracker.position, tracker.tokens.length);
+  view.setHighlight(range);
+}
+
 window.prompter.onScript((text) => {
-  tracker = new Tracker(text);
+  // R16: carry the current position into the new Tracker instead of
+  // resetting to 0 on every edit — otherwise Tracker.feed's pos-5..pos+40
+  // search window loses the speaker's place on every keystroke.
+  const oldPos = tracker.position;
+  const next = new Tracker(text);
+  next.setPosition(carryPosition(oldPos, next.tokens.length));
+  tracker = next;
   view.setScript(tracker.tokens);
   refresh();
+  if (paused) applyPauseHighlight();
 });
 
 window.prompter.onSettings((s) => {
   autoSpeed = s.autoScrollSpeed;
   view.applySettings(s);
+  // R17: live-update a running fallback scroller's speed, not just the
+  // stored autoSpeed used the next time it starts.
+  if (scroller.running) scroller.setSpeed(s.autoScrollSpeed);
 });
 
 window.prompter.onPaused((p) => {
@@ -61,11 +88,15 @@ window.prompter.onPaused((p) => {
   if (p) {
     // R13: freeze position, stop any running fallback scroller.
     scroller.stop();
-    // R6 (AC-05.04): highlight the last sentence (containing position - 1).
-    const range = lastSentenceRange(tracker.sentenceStarts, tracker.position, tracker.tokens.length);
-    view.setHighlight(range);
+    applyPauseHighlight();
+    // R14: clear a stale "lost" status on pause (only that one — offline/
+    // network/mic statuses stay visible since they reflect real conditions).
+    if (currentStatus === LOST_STATUS) setStatus('');
   } else {
     view.setHighlight(null);
+    // R14: refresh lastMatchAt so a >10s-old timestamp doesn't immediately
+    // report 'lost' right after resuming.
+    tracker.setPosition(tracker.position);
     // R13: only restart the fallback scroller if it was active before pause.
     if (fallbackActive) scroller.start(autoSpeed);
   }
@@ -82,25 +113,25 @@ window.prompter.onTranscript((m) => {
   // R14: while paused, don't show the "lost" status. (paused is false here,
   // but guard kept for clarity/defensiveness if ordering ever changes.)
   if (!paused) {
-    view.setStatus(tracker.status === 'lost' ? 'Posisi tidak ditemukan' : '');
+    setStatus(tracker.status === 'lost' ? LOST_STATUS : '');
   }
 });
 
 window.prompter.onStatus((m) => {
   if (m.code === 'listener-offline') {
-    view.setStatus('Listener offline');
+    setStatus('Listener offline');
     fallbackActive = true;
     if (!paused) scroller.start(autoSpeed);
   } else if (m.code === 'network') {
     // R3 (spec §6): network error from the listener page.
-    view.setStatus('Jaringan error');
+    setStatus('Jaringan error');
     fallbackActive = true;
     if (!paused) scroller.start(autoSpeed);
   } else if (m.code === 'mic-denied') {
     // R3 (spec §6): microphone permission denied in the listener browser.
-    view.setStatus('Mikrofon ditolak — izinkan akses mikrofon di browser');
+    setStatus('Mikrofon ditolak — izinkan akses mikrofon di browser');
   } else {
-    view.setStatus('');
+    setStatus('');
     fallbackActive = false;
     if (scroller.running) scroller.stop();
   }

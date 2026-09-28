@@ -61,7 +61,17 @@ window.control.onScript((t) => (scriptEl.value = t));
   $(id).addEventListener('input', push)
 );
 
-scriptEl.addEventListener('input', () => window.control.setScript(scriptEl.value));
+// R16(b): debounce setScript from keystrokes (~400ms) so every keystroke
+// doesn't force a full main-process write + overlay Tracker rebuild while
+// typing. Loading from a file sends immediately (see loadFile handler).
+const SCRIPT_DEBOUNCE_MS = 400;
+let scriptDebounceHandle: ReturnType<typeof setTimeout> | undefined;
+scriptEl.addEventListener('input', () => {
+  if (scriptDebounceHandle) clearTimeout(scriptDebounceHandle);
+  scriptDebounceHandle = setTimeout(() => {
+    window.control.setScript(scriptEl.value);
+  }, SCRIPT_DEBOUNCE_MS);
+});
 $('openListener').addEventListener('click', () => window.control.openListener());
 $('loadFile').addEventListener('click', async () => {
   const text = await window.control.loadScriptFile();

@@ -14,12 +14,21 @@ let server: BridgeServer;
 let store: Store;
 let settings: PromptSettings;
 let paused = false;
+// Finding 1: BridgeServer only emits client-count changes on connect/close.
+// If no client ever connects (or connects before the overlay finishes
+// loading), the overlay never learns the true state. Track the last known
+// count ourselves so we can send the correct status once the overlay is
+// ready, instead of leaving it blank.
+let lastClientCount = 0;
 
+// R18: optional chaining alone doesn't guard against a destroyed-but-still-
+// referenced BrowserWindow (win?.foo() still throws inside foo() once the
+// window is destroyed). Every main -> renderer send checks isDestroyed().
 function overlaySend(channel: string, payload?: unknown) {
-  overlay?.webContents.send(channel, payload);
+  if (overlay && !overlay.isDestroyed()) overlay.webContents.send(channel, payload);
 }
 function controlSend(channel: string, payload?: unknown) {
-  control?.webContents.send(channel, payload);
+  if (control && !control.isDestroyed()) control.webContents.send(channel, payload);
 }
 
 function setPaused(next: boolean) {
@@ -66,6 +75,7 @@ async function boot() {
     if (!paused) overlaySend(IPC.transcript, m);
   });
   server.onClientCount((n) => {
+    lastClientCount = n;
     overlaySend(IPC.status, { type: 'status', code: n > 0 ? 'ok' : 'listener-offline' });
   });
   // R3 (spec §6): forward listener-page errors to the overlay as status.
@@ -85,11 +95,30 @@ async function boot() {
   wireDiagnostics(overlay, 'overlay');
   wireDiagnostics(control, 'control');
 
+  // R18: closing either window quits the app. Null the ref first so any
+  // in-flight send (e.g. a shortcut fired during teardown) sees a cleared
+  // reference rather than a destroyed one.
+  overlay.on('closed', () => {
+    overlay = null;
+    app.quit();
+  });
+  control.on('closed', () => {
+    control = null;
+    app.quit();
+  });
+
   overlay.webContents.on('did-finish-load', () => {
-    applyWindowMode(overlay!, settings);
+    if (overlay && !overlay.isDestroyed()) applyWindowMode(overlay, settings);
     overlaySend(IPC.settings, settings);
     overlaySend(IPC.setScript, store.readScript());
     overlaySend(IPC.paused, paused);
+    // Finding 1: send the status the overlay would have missed if it wasn't
+    // loaded yet when onClientCount last fired (or if no client has ever
+    // connected), so the AutoScroller fallback can start correctly.
+    overlaySend(IPC.status, {
+      type: 'status',
+      code: lastClientCount > 0 ? 'ok' : 'listener-offline',
+    });
   });
   control.webContents.on('did-finish-load', () => {
     controlSend(IPC.settings, settings);
@@ -100,7 +129,7 @@ async function boot() {
     toggleAlwaysOnTop: () => {
       settings = { ...settings, alwaysOnTop: !settings.alwaysOnTop };
       store.writeSettings(settings);
-      applyWindowMode(overlay!, settings);
+      if (overlay && !overlay.isDestroyed()) applyWindowMode(overlay, settings);
       controlSend(IPC.settings, settings);
     },
     togglePause: () => setPaused(!paused),
@@ -112,7 +141,7 @@ async function boot() {
   ipcMain.on(IPC.applySettings, (_e, s: PromptSettings) => {
     settings = s;
     store.writeSettings(settings);
-    applyWindowMode(overlay!, settings);
+    if (overlay && !overlay.isDestroyed()) applyWindowMode(overlay, settings);
     overlaySend(IPC.settings, settings);
     controlSend(IPC.settings, settings);
   });
@@ -122,17 +151,23 @@ async function boot() {
   });
   ipcMain.on(IPC.openListener, () => shell.openExternal(server.url));
   ipcMain.handle(IPC.loadScriptFile, async () => {
-    const r = await dialog.showOpenDialog(control!, {
-      filters: [{ name: 'Naskah', extensions: ['txt', 'md'] }],
-      properties: ['openFile'],
-    });
+    const parent = control && !control.isDestroyed() ? control : undefined;
+    const r = parent
+      ? await dialog.showOpenDialog(parent, {
+          filters: [{ name: 'Naskah', extensions: ['txt', 'md'] }],
+          properties: ['openFile'],
+        })
+      : await dialog.showOpenDialog({
+          filters: [{ name: 'Naskah', extensions: ['txt', 'md'] }],
+          properties: ['openFile'],
+        });
     if (r.canceled || r.filePaths.length === 0) return '';
     return readFileSync(r.filePaths[0], 'utf8');
   });
   // R7 (spec AC-05.01): suspend click-through while the pointer is over the
   // overlay's own controls (e.g. the Pause button), so they stay clickable.
   ipcMain.on(IPC.mouseOverControls, (_e: unknown, over: boolean) => {
-    if (!overlay) return;
+    if (!overlay || overlay.isDestroyed()) return;
     if (settings.clickThrough) {
       overlay.setIgnoreMouseEvents(!over, { forward: true });
     }
