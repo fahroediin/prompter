@@ -36,6 +36,10 @@ function pairScore(s: Token, h: Token): number {
 const GAP = -0.5;
 // Final words kept from earlier speech results as context for the next one.
 const CONTEXT_WORDS = 6;
+// Script words before a manually chosen position that count as already said.
+// Two let a lone word match up to ~6 words past the new position (skipping a
+// sentence's first words) but not further.
+const MOVE_CONTEXT_WORDS = 2;
 
 // Local alignment (Smith-Waterman-like) of heard tokens against a script slice
 // that ENDS at scriptEnd (exclusive). The alignment must end at the LAST row
@@ -153,8 +157,13 @@ export class Tracker {
 
   setPosition(pos: number): void {
     const next = Math.max(0, Math.min(pos, this.tokens.length));
-    // The context described where the speaker was; a manual move invalidates it.
-    if (next !== this.pos) this.context = [];
+    // The heard context described where the speaker was; after a manual move
+    // (click, slider, prev/next) the speaker starts at `next`, so the script
+    // words just before it count as said. Otherwise the first word spoken
+    // there has no companion and can never reach the 2-matched threshold.
+    if (next !== this.pos) {
+      this.context = this.tokens.slice(Math.max(0, next - MOVE_CONTEXT_WORDS), next);
+    }
     this.pos = next;
     this.lastMatchAt = this.now();
   }

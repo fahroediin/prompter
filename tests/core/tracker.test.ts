@@ -210,3 +210,49 @@ describe('Tracker with short speech segments', () => {
     expect(t.position).toBe(7);
   });
 });
+
+// The speaker clicks a word (or uses the slider / prev / next) to skip ahead
+// and starts reading there. The words before the new position count as said.
+describe('Tracker after a manual move', () => {
+  // selamat(0) pagi(1) semuanya(2) | hari(3) ini(4) kami(5) akan(6)
+  // memperkenalkan(7) fitur(8) baru(9) untuk(10) tim(11) penjualan(12) |
+  // fitur(13) ini(14) membantu(15) presentasi(16) menjadi(17) lebih(18) lancar(19)
+  const S =
+    'Selamat pagi semuanya. Hari ini kami akan memperkenalkan fitur baru untuk tim penjualan. ' +
+    'Fitur ini membantu presentasi menjadi lebih lancar.';
+
+  it('saying the clicked word moves on at once (one-word final)', () => {
+    const t = new Tracker(S);
+    t.setPosition(6); // clicked "akan"
+    t.feed('akan', true);
+    expect(t.position).toBe(7);
+  });
+
+  it('saying the clicked word moves on at once (one-word interim)', () => {
+    const t = new Tracker(S);
+    t.setPosition(6);
+    t.feed('akan', false);
+    expect(t.position).toBe(7);
+  });
+
+  it('after jumping to a sentence start, skipping its first 3 words still follows', () => {
+    const t = new Tracker(S);
+    t.setPosition(3); // e.g. prev-sentence to "Hari"
+    t.feed('akan', true); // skipped "hari ini kami"
+    expect(t.position).toBe(7);
+  });
+
+  it('an off-script word after a manual move does not move', () => {
+    const t = new Tracker(S);
+    t.setPosition(6);
+    t.feed('halo', true);
+    expect(t.position).toBe(6);
+  });
+
+  it('a lone word far ahead does not pull the position there', () => {
+    const t = new Tracker(S);
+    t.setPosition(3);
+    t.feed('presentasi', true); // word 16, 13 words ahead
+    expect(t.position).toBe(3);
+  });
+});
