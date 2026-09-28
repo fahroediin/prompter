@@ -37,18 +37,35 @@ describe('Tracker basic follow', () => {
     const t = new Tracker(SCRIPT);
     t.feed('selamat pagi semua hari ini kita membahas', true);
     const p = t.position;
+    // Without the interim guard, this phrase's true alignment end is token 3
+    // (a real retreat from p=7) -- so this assertion only holds BECAUSE the
+    // interim-may-only-advance rule is enforced; disabling that guard makes
+    // this test fail (verified manually: position becomes 3, not p).
     t.feed('selamat pagi', false); // interim pointing backwards
     expect(t.position).toBe(p);
   });
 
-  it('AC-04.05: repeating the last sentence is still followed', () => {
+  it('AC-04.05: repeating the last sentence is still followed (exact retreat position)', () => {
     const t = new Tracker(SCRIPT);
-    t.feed('selamat pagi semua hari ini kita membahas produk baru', true);
-    const p = t.position;
-    // repeat previous sentence as a final -> allowed small retreat
-    t.feed('hari ini kita membahas produk baru', true);
-    expect(t.position).toBeLessThanOrEqual(p);
-    expect(t.position).toBeGreaterThan(0);
+    // Advance a bit past the end of sentence 2 ("...produk baru" ends at
+    // token index 9), into sentence 3, so the upcoming repeat is a genuine
+    // retreat and not just "stay where we already are".
+    t.setPosition(12);
+    // repeat sentence 2 as a final -> should land exactly at its end (idx 9),
+    // a retreat of 3 tokens, within the allowed <=5 retreat.
+    const p = t.feed('hari ini kita membahas produk baru', true);
+    expect(p).toBe(9);
+  });
+
+  it('AC-04.05b: a final retreat of more than 5 tokens is refused', () => {
+    const t = new Tracker(SCRIPT);
+    // Place position far past the phrase we're about to repeat: "selamat
+    // pagi semua" truly ends at token index 3, so retreating there from 15
+    // would be a 12-token retreat -- well beyond the allowed 5, so it must
+    // be refused and position must stay put.
+    t.setPosition(15);
+    const p = t.feed('selamat pagi semua', true);
+    expect(p).toBe(15);
   });
 
   it('AC-04.06: duplicate phrase does not jump to a far occurrence', () => {
@@ -56,6 +73,36 @@ describe('Tracker basic follow', () => {
     const t = new Tracker(dup);
     t.feed('terima kasih semua', true); // matches the near (first) occurrence
     expect(t.position).toBeLessThanOrEqual(4);
+  });
+
+  it('matches purely via edit distance, with no exact or phonetic matches', () => {
+    // Every heard word here differs from its script word (so no exact match),
+    // and each pair's phonetic reduction also differs (so no phonetic match
+    // either, verified: phonetic('kecepatan')='kesepatan' vs
+    // phonetic('kecepetan')='kesepetan', etc.) -- only Levenshtein <= cap
+    // (cap=2 for words > 5 chars) lets these three word-pairs score. Three
+    // edit-distance matches (1 each) clear the score>=3 threshold together.
+    // Manually verified this test fails (position stays 0) when the
+    // Levenshtein branch in pairScore() is disabled.
+    const t = new Tracker('kecepatan membahas perusahaan pekerjaan');
+    const p = t.feed('kecepetan membahes perusahaen', true);
+    expect(p).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('Tracker sentence boundaries with newlines', () => {
+  it('a newline between lines starts a new sentence even with no punctuation', () => {
+    const script = 'Baris satu tanpa titik\nBaris dua tanpa titik\nBaris tiga';
+    const t = new Tracker(script);
+    // tokens: 0 baris,1 satu,2 tanpa,3 titik | 4 baris,5 dua,6 tanpa,7 titik | 8 baris,9 tiga
+    expect(t.sentenceStarts).toEqual([0, 4, 8]);
+  });
+
+  it('nextSentence walks newline-separated lines', () => {
+    const script = 'Baris satu tanpa titik\nBaris dua tanpa titik\nBaris tiga';
+    const t = new Tracker(script);
+    expect(t.nextSentence()).toBe(4);
+    expect(t.nextSentence()).toBe(8);
   });
 });
 
@@ -74,9 +121,16 @@ describe('Tracker manual + pause + status', () => {
     expect(t.position).toBe(5);
   });
 
-  it('no feed leaves position unchanged (pause)', () => {
-    const t = new Tracker(SCRIPT);
+  it('no feed leaves position unchanged as time passes (pause)', () => {
+    let clock = 1000;
+    const t = new Tracker(SCRIPT, () => clock);
     t.setPosition(4);
+    // Simulate a long pause: advance the injected clock a lot without ever
+    // calling feed(). Nothing but feed()/setPosition() may move position, so
+    // it must still read 4 no matter how much time passes while paused.
+    clock += 60000;
+    expect(t.position).toBe(4);
+    clock += 5 * 60000;
     expect(t.position).toBe(4);
   });
 

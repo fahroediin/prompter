@@ -36,7 +36,11 @@ function pairScore(s: Token, h: Token): number {
 const GAP = -0.5;
 
 // Local alignment (Smith-Waterman-like) of heard tokens against a script slice
-// that ENDS at scriptEnd (exclusive). Returns {score, matched}.
+// that ENDS at scriptEnd (exclusive). The alignment must end at the LAST row
+// (i.e. at script token scriptEnd-1) — otherwise "ending at j" is meaningless
+// and callers can't apply position rules (interim-advance-only, final-retreat
+// clamp) relative to j. Returns {score, matched} for the best alignment that
+// ends at the last script row, across all possible heard-column endpoints.
 function alignEndingAt(
   script: Token[],
   scriptEnd: number,
@@ -46,11 +50,10 @@ function alignEndingAt(
   const s = script.slice(start, scriptEnd);
   const m = s.length;
   const n = heard.length;
+  if (m === 0) return { score: 0, matched: 0 };
   // dp[i][j] = best local score of alignment ending at s[i-1],heard[j-1]
   const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
   const mt: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  let best = 0;
-  let bestMatched = 0;
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       const ps = pairScore(s[i - 1], heard[j - 1]);
@@ -68,10 +71,16 @@ function alignEndingAt(
       } else {
         mt[i][j] = 0;
       }
-      if (v > best) {
-        best = v;
-        bestMatched = mt[i][j];
-      }
+    }
+  }
+  // Anchor at the last script row (i = m): the alignment must end at
+  // scriptEnd-1. Take the best score across all heard-column endpoints.
+  let best = 0;
+  let bestMatched = 0;
+  for (let j = 1; j <= n; j++) {
+    if (dp[m][j] > best) {
+      best = dp[m][j];
+      bestMatched = mt[m][j];
     }
   }
   return { score: best, matched: bestMatched };
@@ -101,7 +110,16 @@ export class Tracker {
     const starts: number[] = [];
     let count = 0;
     let atStart = true;
-    for (const raw of text.split(/\s+/)) {
+    // Split while KEEPING whitespace separators so a newline between tokens
+    // (which /\s+/ would otherwise silently swallow) can still be detected as
+    // a sentence boundary, alongside '.', '!', '?' inside a token itself.
+    const parts = text.split(/(\s+)/);
+    for (const part of parts) {
+      if (/^\s+$/.test(part)) {
+        if (part.includes('\n')) atStart = true;
+        continue;
+      }
+      const raw = part;
       const stripped = raw.replace(/[^\p{L}\p{N}]/gu, '');
       if (stripped) {
         if (atStart) {
@@ -110,7 +128,7 @@ export class Tracker {
         }
         count++;
       }
-      if (/[.!?\n]/.test(raw)) atStart = true;
+      if (/[.!?]/.test(raw)) atStart = true;
     }
     if (starts.length === 0) starts.push(0);
     return starts;
@@ -133,7 +151,14 @@ export class Tracker {
     const heard = heardTokens(text, isFinal);
     if (heard.length === 0) return this.pos;
 
-    const lo = Math.max(0, this.pos - 5);
+    // Search window for candidate ends `j`. The lower bound is intentionally
+    // wider than the "final may retreat <=5 tokens" rule below: if the search
+    // floor were exactly pos-5, the retreat clamp could never trigger (the
+    // window itself would never offer a bestEnd more than ~4 tokens behind
+    // pos), making that rule dead code. Widening the floor lets the search
+    // find a legitimately-far match, so the retreat clamp can actually reject
+    // it when it exceeds the allowed 5-token retreat.
+    const lo = Math.max(0, this.pos - 15);
     const hi = Math.min(this.tokens.length, this.pos + 40);
 
     let bestEnd = -1;
