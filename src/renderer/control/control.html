@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <title>Prompter — Kontrol</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 16px; }
+      label { display: block; margin: 10px 0 2px; font-size: 13px; }
+      textarea { width: 100%; height: 200px; }
+      .row { display: flex; gap: 8px; align-items: center; }
+      button { margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <h3>Naskah</h3>
+    <textarea id="script" placeholder="Tempel naskah di sini…"></textarea>
+    <div class="row">
+      <button id="loadFile">Muat dari file…</button>
+      <button id="openListener">Buka listener di browser</button>
+    </div>
+
+    <h3>Tampilan</h3>
+    <label>Transparansi latar <span id="bgVal"></span></label>
+    <input id="bgOpacity" type="range" min="0" max="100" />
+    <label>Tebal huruf <span id="fwVal"></span></label>
+    <input id="fontWeight" type="range" min="300" max="900" step="100" />
+    <label>Ukuran font <span id="fsVal"></span></label>
+    <input id="fontSize" type="range" min="16" max="72" />
+    <label>Margin <span id="mVal"></span></label>
+    <input id="margin" type="range" min="0" max="160" />
+    <label>Kecepatan auto-scroll <span id="asVal"></span></label>
+    <input id="autoScrollSpeed" type="range" min="0" max="200" />
+
+    <h3>Mode</h3>
+    <label><input id="alwaysOnTop" type="checkbox" /> Selalu di atas (Ctrl+Shift+T)</label>
+    <label><input id="clickThrough" type="checkbox" /> Klik tembus</label>
+
+    <script src="./control.js"></script>
+  </body>
+</html>
