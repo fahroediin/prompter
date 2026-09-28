@@ -1,4 +1,5 @@
 import type { Token } from '../../core/normalize';
+import { indexAtReadingLine } from './reading-line';
 
 export class ScriptView {
   private root: HTMLElement;
@@ -25,21 +26,35 @@ export class ScriptView {
     });
   }
 
-  setPosition(pos: number): void {
+  // scroll: false marks words only, for when the user has just scrolled there.
+  // instant: jump without smooth animation (a running AutoScroller writes
+  // scrollTop every frame and would cancel a smooth scroll).
+  setPosition(pos: number, opts: { scroll?: boolean; instant?: boolean } = {}): void {
     this.spans.forEach((span, i) => {
       span.classList.toggle('read', i < pos);
       span.classList.toggle('active', i === pos);
     });
     const active = this.spans[pos];
-    if (active) {
+    if (active && opts.scroll !== false) {
       const target = active.offsetTop - this.viewEl.clientHeight / 3;
       const top = Math.max(0, target);
-      if (typeof this.viewEl.scrollTo === 'function') {
+      if (!opts.instant && typeof this.viewEl.scrollTo === 'function') {
         this.viewEl.scrollTo({ top, behavior: 'smooth' });
       } else {
         this.viewEl.scrollTop = top;
       }
     }
+  }
+
+  // Index of the word currently sitting on the reading line (1/3 from top);
+  // `current` is kept when it is already on that line.
+  positionAtReadingLine(current?: number): number {
+    const line = this.viewEl.scrollTop + this.viewEl.clientHeight / 3;
+    return indexAtReadingLine(
+      this.spans.map((s) => s.offsetTop),
+      line,
+      current
+    );
   }
 
   setPaused(paused: boolean): void {

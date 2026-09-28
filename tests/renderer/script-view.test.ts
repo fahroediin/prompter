@@ -58,6 +58,32 @@ describe('ScriptView', () => {
     expect(() => v.setPosition(1)).not.toThrow();
   });
 
+  it('setPosition with scroll: false marks words without moving the scroll', () => {
+    const v = new ScriptView(root);
+    v.setScript(normalize('halo dunia baru'));
+    const viewEl = root.querySelector('#view') as HTMLElement;
+    viewEl.scrollTop = 50;
+    v.setPosition(1, { scroll: false });
+    expect(viewEl.scrollTop).toBe(50);
+    expect(root.querySelectorAll('.words span')[1].classList.contains('active')).toBe(true);
+    v.setPosition(1);
+    expect(viewEl.scrollTop).toBe(0);
+  });
+
+  it('positionAtReadingLine maps the word at 1/3 of the viewport to its index', () => {
+    const v = new ScriptView(root);
+    v.setScript(normalize('satu dua tiga empat'));
+    const viewEl = root.querySelector('#view') as HTMLElement;
+    // jsdom has no layout: give each span a top and the view a height/scroll.
+    const spans = root.querySelectorAll<HTMLElement>('.words span');
+    [0, 40, 80, 120].forEach((top, i) =>
+      Object.defineProperty(spans[i], 'offsetTop', { value: top, configurable: true })
+    );
+    Object.defineProperty(viewEl, 'clientHeight', { value: 90, configurable: true });
+    viewEl.scrollTop = 60; // reading line = 60 + 90/3 = 90 -> word at top 80
+    expect(v.positionAtReadingLine()).toBe(2);
+  });
+
   describe('setHighlight', () => {
     it('marks exactly the spans in [start, end)', () => {
       const v = new ScriptView(root);

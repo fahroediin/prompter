@@ -8,10 +8,18 @@ type Handlers = {
 };
 
 export function registerShortcuts(h: Handlers): void {
-  globalShortcut.register('CommandOrControl+Shift+T', h.toggleAlwaysOnTop);
-  globalShortcut.register('CommandOrControl+Shift+Space', h.togglePause);
-  globalShortcut.register('CommandOrControl+Shift+Right', h.next);
-  globalShortcut.register('CommandOrControl+Shift+Left', h.prev);
+  const bindings: [string, () => void][] = [
+    ['CommandOrControl+Shift+T', h.toggleAlwaysOnTop],
+    ['CommandOrControl+Shift+Space', h.togglePause],
+    ['CommandOrControl+Shift+Right', h.next],
+    ['CommandOrControl+Shift+Left', h.prev],
+  ];
+  // register() returns false when another app already owns the accelerator.
+  for (const [accel, fn] of bindings) {
+    if (!globalShortcut.register(accel, fn)) {
+      console.warn('[prompter] shortcut not available (used by another app):', accel);
+    }
+  }
 }
 
 export function unregisterShortcuts(): void {

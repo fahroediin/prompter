@@ -3,6 +3,7 @@ import { ScriptView } from './script-view';
 import { AutoScroller } from './auto-scroller';
 import { lastSentenceRange } from './sentence-range';
 import { carryPosition } from './carry-position';
+import { progressLabel } from './progress';
 import type { TranscriptMsg, StatusMsg } from '../../shared/messages';
 import type { PromptSettings } from '../../main/settings';
 
@@ -28,7 +29,9 @@ const view = new ScriptView(root);
 const viewEl = document.getElementById('view') as HTMLElement;
 const scroller = new AutoScroller(viewEl);
 const pauseBtn = document.getElementById('pauseBtn') as HTMLButtonElement | null;
-const controlsEl = document.querySelector('.controls') as HTMLElement | null;
+const badgeEl = document.querySelector('.badge') as HTMLElement | null;
+const seekEl = document.getElementById('seek') as HTMLInputElement | null;
+const progressEl = document.getElementById('progress') as HTMLElement | null;
 
 const LOST_STATUS = 'Posisi tidak ditemukan';
 
@@ -48,9 +51,18 @@ function setStatus(text: string) {
   view.setStatus(text);
 }
 
-function refresh() {
-  view.setPosition(tracker.position);
-  window.prompter.sendPosition(tracker.position);
+// Mark words, update the progress footer and tell main. scroll: false when
+// the text is already where the user (or the fallback scroller) put it.
+function render(opts: { scroll?: boolean } = {}) {
+  const pos = tracker.position;
+  view.setPosition(pos, { scroll: opts.scroll, instant: scroller.running });
+  if (seekEl) {
+    seekEl.max = String(tracker.tokens.length);
+    seekEl.value = String(pos);
+  }
+  if (progressEl) progressEl.textContent = progressLabel(pos, tracker.tokens.length);
+  window.prompter.sendPosition(pos);
+  if (paused) applyPauseHighlight();
 }
 
 function applyPauseHighlight() {
@@ -58,6 +70,38 @@ function applyPauseHighlight() {
   const range = lastSentenceRange(tracker.sentenceStarts, tracker.position, tracker.tokens.length);
   view.setHighlight(range);
 }
+
+// Adopt the word on the reading line as the position (after a manual scroll,
+// and continuously while the fallback scroller moves the text).
+function syncFromScroll() {
+  const pos = view.positionAtReadingLine(tracker.position);
+  if (pos === tracker.position) return;
+  tracker.setPosition(pos);
+  render({ scroll: false });
+}
+
+// The fallback scroller moves pixels, so poll the reading line to keep the
+// position (dimming, progress, prev/next) in step with what is on screen.
+let fallbackSync: ReturnType<typeof setInterval> | undefined;
+function startScroller() {
+  scroller.start(autoSpeed);
+  clearInterval(fallbackSync);
+  fallbackSync = setInterval(syncFromScroll, 250);
+}
+function stopScroller() {
+  scroller.stop();
+  clearInterval(fallbackSync);
+  fallbackSync = undefined;
+}
+
+function moveTo(step: () => void) {
+  if (scroller.running) syncFromScroll();
+  step();
+  render();
+}
+
+const goPrev = () => moveTo(() => tracker.prevSentence());
+const goNext = () => moveTo(() => tracker.nextSentence());
 
 window.prompter.onScript((text) => {
   // R16: carry the current position into the new Tracker instead of
@@ -68,8 +112,7 @@ window.prompter.onScript((text) => {
   next.setPosition(carryPosition(oldPos, next.tokens.length));
   tracker = next;
   view.setScript(tracker.tokens);
-  refresh();
-  if (paused) applyPauseHighlight();
+  render();
 });
 
 window.prompter.onSettings((s) => {
@@ -84,10 +127,11 @@ window.prompter.onPaused((p) => {
   paused = p;
   view.setPaused(p);
   if (pauseBtn) pauseBtn.textContent = p ? 'Lanjut' : 'Jeda';
+  if (badgeEl) badgeEl.textContent = p ? 'PAUSED' : 'AKTIF';
 
   if (p) {
     // R13: freeze position, stop any running fallback scroller.
-    scroller.stop();
+    stopScroller();
     applyPauseHighlight();
     // R14: clear a stale "lost" status on pause (only that one — offline/
     // network/mic statuses stay visible since they reflect real conditions).
@@ -98,57 +142,88 @@ window.prompter.onPaused((p) => {
     // report 'lost' right after resuming.
     tracker.setPosition(tracker.position);
     // R13: only restart the fallback scroller if it was active before pause.
-    if (fallbackActive) scroller.start(autoSpeed);
+    if (fallbackActive) startScroller();
   }
 });
 
 window.prompter.onTranscript((m) => {
   if (paused) return;
   if (scroller.running) {
-    scroller.stop(); // speech resumed -> leave fallback
+    stopScroller(); // speech resumed -> leave fallback
     fallbackActive = false;
   }
   tracker.feed(m.text, m.isFinal);
-  refresh();
-  // R14: while paused, don't show the "lost" status. (paused is false here,
-  // but guard kept for clarity/defensiveness if ordering ever changes.)
-  if (!paused) {
-    setStatus(tracker.status === 'lost' ? LOST_STATUS : '');
-  }
+  render();
+  setStatus(tracker.status === 'lost' ? LOST_STATUS : '');
 });
 
 window.prompter.onStatus((m) => {
   if (m.code === 'listener-offline') {
     setStatus('Listener offline');
     fallbackActive = true;
-    if (!paused) scroller.start(autoSpeed);
+    if (!paused) startScroller();
   } else if (m.code === 'network') {
     // R3 (spec §6): network error from the listener page.
     setStatus('Jaringan error');
     fallbackActive = true;
-    if (!paused) scroller.start(autoSpeed);
+    if (!paused) startScroller();
   } else if (m.code === 'mic-denied') {
     // R3 (spec §6): microphone permission denied in the listener browser.
     setStatus('Mikrofon ditolak — izinkan akses mikrofon di browser');
   } else {
     setStatus('');
     fallbackActive = false;
-    if (scroller.running) scroller.stop();
+    if (scroller.running) stopScroller();
   }
 });
 
-window.prompter.onManualNext(() => {
-  tracker.nextSentence();
-  refresh();
-});
-window.prompter.onManualPrev(() => {
-  tracker.prevSentence();
-  refresh();
-});
+window.prompter.onManualNext(goNext);
+window.prompter.onManualPrev(goPrev);
 
 pauseBtn?.addEventListener('click', () => window.prompter.togglePause());
+document.getElementById('prevBtn')?.addEventListener('click', goPrev);
+document.getElementById('nextBtn')?.addEventListener('click', goNext);
 
-// R7 (spec AC-05.01): let main know when the pointer is over the controls so
-// click-through can be suspended for just that area.
-controlsEl?.addEventListener('mouseenter', () => window.prompter.setMouseOverControls(true));
-controlsEl?.addEventListener('mouseleave', () => window.prompter.setMouseOverControls(false));
+// Clicking a word makes it the current position.
+viewEl.addEventListener('click', (e) => {
+  const span = (e.target as HTMLElement).closest<HTMLElement>('span[data-i]');
+  if (!span) return;
+  moveTo(() => tracker.setPosition(Number(span.dataset.i)));
+});
+
+// Dragging the progress slider seeks anywhere in the script.
+seekEl?.addEventListener('input', () => {
+  tracker.setPosition(Number(seekEl.value));
+  render();
+});
+
+// Wheel scrolling moves the text natively; once it settles, adopt the word on
+// the reading line as the position so voice-follow continues from there.
+let wheelTimer: ReturnType<typeof setTimeout> | undefined;
+viewEl.addEventListener(
+  'wheel',
+  () => {
+    clearTimeout(wheelTimer);
+    wheelTimer = setTimeout(syncFromScroll, 200);
+  },
+  { passive: true }
+);
+
+// Keys while the overlay has focus (global Ctrl+Shift shortcuts work anytime).
+window.addEventListener('keydown', (e) => {
+  if (e.target === seekEl) return; // the slider handles its own arrow keys
+  if (e.target instanceof HTMLButtonElement) return; // Space already clicks it
+  if (e.key === 'ArrowLeft') goPrev();
+  else if (e.key === 'ArrowRight') goNext();
+  else if (e.key === 'Home') moveTo(() => tracker.setPosition(0));
+  else if (e.key === ' ') window.prompter.togglePause();
+  else return;
+  e.preventDefault();
+});
+
+// R7 (spec AC-05.01): let main know when the pointer is over the bar or the
+// footer so click-through can be suspended for just those areas.
+document.querySelectorAll<HTMLElement>('.controls').forEach((el) => {
+  el.addEventListener('mouseenter', () => window.prompter.setMouseOverControls(true));
+  el.addEventListener('mouseleave', () => window.prompter.setMouseOverControls(false));
+});
