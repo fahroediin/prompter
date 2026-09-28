@@ -254,6 +254,61 @@ describe('Tracker with repeated passages', () => {
     expect(t.position).toBeLessThanOrEqual(92);
   });
 
+  // S word indices: chorus 1 = biar(18) ku tinggalkan saja | ku(22) tak mau
+  // hatiku terluka(26) | lebih(27) baik(28) ku lepaskan saja(31) | ku(32) tak(33) ...
+
+  it('a misheard word at the end of a growing interim does not jump ahead', () => {
+    const t = new Tracker(S);
+    t.setPosition(18);
+    t.feed('biar ku tinggalkan saja', true);
+    for (const text of ['ku', 'ku tak', 'ku tak mau']) t.feed(text, false);
+    expect(t.position).toBe(25);
+    t.feed('ku tak mau baik', false); // "hatiku" misheard as "baik" (word 28)
+    expect(t.position).toBeLessThanOrEqual(26);
+  });
+
+  it('context plus one misheard word does not reach the next copy of that word', () => {
+    const t = new Tracker(S);
+    t.setPosition(18);
+    t.feed('biar ku tinggalkan saja ku tak mau hatiku terluka', true);
+    expect(t.position).toBe(27);
+    t.feed('tak', false); // "lebih" misheard as "tak"; the next "tak" is word 33
+    expect(t.position).toBeLessThanOrEqual(28);
+  });
+
+  it('after skipping unread lines, earlier context does not pull into a later copy', () => {
+    // A block, then lines the reader skips, then B; A and B then repeat
+    // without the junk in between, so earlier context fits the later copy.
+    const A = 'Ku tak mau batinku tersiksa\n';
+    const JUNK = 'Lagu lain\nBintang\nGrup Satu\nKu Tak Bisa\nGrup Dua\nPutri Iklan\nGrup Tiga\n';
+    const B = 'Jangan kau selalu merasa\nDunia bukan milikmu saja\n';
+    const t = new Tracker(A + JUNK + B + A + B);
+    // ku(0) tak mau batinku tersiksa(4) | junk 5..18 | jangan(19) kau selalu
+    // merasa | dunia(23) bukan milikmu(25) saja(26) | A again 27..31 | jangan(32) ...
+    t.feed('ku tak mau batinku tersiksa', true);
+    t.feed('tersiksa jangan kau', true);
+    t.feed('merasa', false);
+    t.feed('merasa dunia', false);
+    t.feed('merasa dunia bukan', false);
+    t.feed('merasa dunia bukan milikmu', false);
+    expect(t.position).toBe(26);
+  });
+
+  it('context alone does not pull a final result back behind the position', () => {
+    const A = 'Lebih baik kusudahi saja\nKu tak mau batinku tersiksa\n';
+    const JUNK = 'Lagu lain\nBintang\nGrup Satu\nKu Tak Bisa\nGrup Dua\nPutri Iklan\nGrup Tiga\n';
+    const B = 'Jangan kau selalu merasa\nDunia bukan milikmu saja\n';
+    const t = new Tracker(A + JUNK + B);
+    // lebih(0) baik kusudahi saja(3) | ku(4) tak mau batinku(7) tersiksa(8) | junk | jangan(23) ...
+    t.feed('lebih baik kusudahi saja ku', true);
+    for (const text of ['tak', 'tak mau', 'tak mau batinku']) t.feed(text, false);
+    t.feed('tak mau batinku', true);
+    const at = t.position;
+    // the reader skipped "tersiksa" and the junk lines, and reads B
+    t.feed('kau selalu merasa', true);
+    expect(t.position).toBeGreaterThanOrEqual(at);
+  });
+
   it('a long exact phrase can still move the position far ahead', () => {
     const t = new Tracker(S);
     t.setPosition(5);
